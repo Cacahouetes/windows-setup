@@ -99,4 +99,3 @@ Dès que Winhance proposera une CLI, cette étape sera automatisée.
 
 MAS est un outil de contournement de licence. Son usage engage la responsabilité de
 la personne qui l'exécute au regard des conditions de licence Microsoft.
-```
