@@ -33,7 +33,7 @@ MANUEL
   [1] Point de restauration système
   [2] WinUtil - ouverture complète (apps + tweaks, choix libre)
   [3] Winhance - installation + profil (import manuel final)
-  [4] Microsoft Office - installation silencieuse (ODT)
+  [4] Microsoft Office - installation (choix de l'édition et des apps)
   [5] Activation Windows / Office - MAS
 
 AUTOMATIQUE
@@ -50,9 +50,17 @@ Le mode `-Auto` pose les questions dans l'ordre suivant :
 2. **Tweaks WinUtil** : Aucun / Standard / Advanced (défaut) / Custom (choix manuel dans WinUtil)
 3. **Ouvrir WinUtil** pour installer des applications et/ou appliquer des tweaks supplémentaires
    (sautée si `Custom` a été choisi, pour éviter d'ouvrir la fenêtre deux fois)
-4. **Installer Microsoft Office** ?
+4. **Installer Microsoft Office** ? puis choix de l'édition :
+   - `[1] Minimal` — Word, Excel, PowerPoint uniquement (défaut)
+   - `[2] O365ProPlusRetail` — Microsoft 365 Apps (complet)
+   - `[3] O365BusinessRetail`
+   - `[4] O365HomePremRetail`
+   - `[5] Personnalisé` — saisir un Product ID
+   - Sauf pour `[1]`, question complémentaire : quelles applications supprimer
+     (Access, OneNote, Outlook, Publisher, Teams, OneDrive, ...) — sélection multiple.
 5. **Activation** Windows et/ou Office (MAS : HWID + Ohook)
-6. **Installer Winhance et récupérer le profil** ?
+6. **Installer Winhance et récupérer le profil** ? puis choix de l'emplacement
+   (`[1] Téléchargements` par défaut / `[2] autre dossier`).
 
 ## Personnalisation
 
@@ -62,10 +70,13 @@ En tête de `setup.ps1` (section `CONFIG`) :
 |---|---|
 | `$ScriptUrl` | URL de ce script sur GitHub (utilisée pour l'auto-élévation) |
 | `$WinhanceConfigUrl` | URL du profil `.winhance` à récupérer |
-| `$OfficeEdition` | Édition Office (`O365ProPlusRetail`, `ProPlus2024Volume`, ...) |
+| `$OfficeEdition` | Édition Office par défaut (`O365ProPlusRetail`, `ProPlus2024Volume`, ...) |
 | `$OfficeChannel` | Canal (`Current`, `SemiAnnual`, `PerpetualVL2024`, ...) |
 | `$OfficeLanguage` | Langue (`fr-fr`, `en-us`, ...) |
 | `$OfficeArch` | Architecture (`64` / `32`) |
+| `$OfficeExcludedApps` | Applications exclues par défaut (mode Minimal). IDs valides : `Access`, `Excel`, `Groove` (OneDrive), `Lync` (Skype), `OneNote`, `OneDrive`, `Outlook`, `OutlookForWindows`, `PowerPoint`, `Publisher`, `Teams`, `Word` |
+
+Le mode Minimal (`O365ProPlusRetail` + `$OfficeExcludedApps`) n'installe que **Word, Excel et PowerPoint**.
 
 Options supplémentaires : `-NoOffice`, `-NoWinhance`, `-NoActivation`,
 `-Preset Minimal|Standard|Advanced` (défaut : `Advanced`).
@@ -80,8 +91,9 @@ Options supplémentaires : `-NoOffice`, `-NoWinhance`, `-NoActivation`,
 ## Limitation connue : Winhance
 
 À la date de ce README, Winhance ne dispose pas encore d'une CLI pour appliquer un profil `.winhance`.
-C'est la **seule étape non automatisée** : après l'installation, le script télécharge le profil et
-l'ouvre dans l'explorateur. Il reste 2 clics manuels dans Winhance :
+C'est la **seule étape non automatisée** : après l'installation, le script télécharge le profil dans
+**Téléchargements** (ou l'emplacement choisi en mode auto) et l'ouvre dans l'explorateur.
+Il reste 2 clics manuels dans Winhance :
 
 1. `Config` -> `Import Config`
 2. Sélectionner le fichier téléchargé

@@ -31,6 +31,10 @@ $OfficeEdition      = "O365ProPlusRetail"
 $OfficeChannel      = "Current"
 $OfficeLanguage     = "fr-fr"
 $OfficeArch         = "64"
+# Applications EXCLUES par defaut (mode Minimal = Word/Excel/PowerPoint uniquement).
+# Liste des IDs ExcludeApp valides : Access, Excel, Groove (OneDrive), Lync (Skype),
+# OneNote, OneDrive, Outlook, OutlookForWindows, PowerPoint, Publisher, Teams, Word.
+$OfficeExcludedApps = @('Access','OneNote','Outlook','OutlookForWindows','Publisher','Teams','Groove','Lync')
 
 # ======================================================================
 #  PRETRAITEMENT (TLS, admin, elevation)
@@ -97,7 +101,7 @@ function New-RestorePointSystem {
     Write-Host "   Point de restauration..." -ForegroundColor Cyan
     try {
         Enable-ComputerRestore -Drive "$env:SystemDrive" -ErrorAction SilentlyContinue
-        Checkpoint-Computer -Description "Setup Windows $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestoreType 'MODIFY_SETTINGS' -ErrorAction Stop
+        Checkpoint-Computer -Description "Setup Windows $(Get-Date -Format 'yyyy-MM-dd HH:mm')" -RestorePointType 'MODIFY_SETTINGS' -ErrorAction Stop
         Write-Host "   Point de restauration cree." -ForegroundColor Green
     }
     catch {
@@ -130,15 +134,37 @@ function Install-Winhance {
     Write-Host "   Winhance installe." -ForegroundColor Green
 }
 
+function Select-WinhanceFolder {
+    param([switch]$Ask)
+    $downloads = "$env:USERPROFILE\Downloads"
+    if (-not (Test-Path -LiteralPath $downloads -PathType Container)) {
+        New-Item -ItemType Directory -Force -Path $downloads | Out-Null
+    }
+    if (-not $Ask) { return $downloads }
+    Write-Host ""
+    Write-Host "   Emplacement du profil Winhance :"
+    Write-Host "    [1] Telechargements (defaut)"
+    Write-Host "    [2] Autre emplacement"
+    $c = Read-Host "   Votre choix (Entree = Telechargements)"
+    if ($c -eq '2') {
+        $dir = Read-Host "   Chemin complet du dossier (ex: D:\Config)"
+        if (Test-Path -LiteralPath $dir -PathType Container) { return $dir }
+        Write-Host "   Dossier invalide, Telechargements utilise." -ForegroundColor Yellow
+    }
+    return $downloads
+}
+
 function Apply-WinhanceConfig {
+    param([switch]$AskLocation)
     if ($WinhanceConfigUrl -match 'VOTRE_') {
         Write-Host "   [ATTENTION] URL du profil Winhance non configuree (section CONFIG)." -ForegroundColor Yellow
         Write-Host "   Hebergez votre fichier .winhance sur GitHub et renseignez $WinhanceConfigUrl."
         return
     }
-    $local = "$env:TEMP\Winhance_Config.winhance"
+    $folder = Select-WinhanceFolder -Ask:$AskLocation
+    $local = Join-Path $folder "Winhance_Config.winhance"
     if (Test-Path $local) { Remove-Item $local -Force }
-    Write-Host "   Telechargement du profil Winhance..." -ForegroundColor Cyan
+    Write-Host "   Telechargement du profil Winhance vers : $folder" -ForegroundColor Cyan
     try {
         Invoke-WebRequest $WinhanceConfigUrl -OutFile $local -UseBasicParsing
     }
@@ -155,15 +181,105 @@ function Apply-WinhanceConfig {
     Start-Process explorer.exe "/select,`"$local`""
 }
 
+function Get-OdtDownloadUrl {
+    # Le fwlink historique (LinkID=626890) ne pointe plus vers l'ODT (redirige vers
+    # un article Azure -> 404). On recupere donc l'URL directe depuis la page officielle.
+    $fallback = "https://download.microsoft.com/download/6c1eeb25-cf8b-41d9-8d0d-cc1dbc032140/officedeploymenttool_20228-20124.exe"
+    try {
+        $page = & curl.exe -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" "https://www.microsoft.com/en-us/download/details.aspx?id=49117"
+        $match = [regex]::Match(($page -join "`n"), 'https://download\.microsoft\.com/[^"'']+officedeploymenttool_[^"'']+\.exe')
+        if ($match.Success) { return $match.Value }
+    }
+    catch {}
+    Write-Host "   [ATTENTION] Extraction de l'URL de l'ODT impossible, URL de secours utilisee." -ForegroundColor Yellow
+    return $fallback
+}
+
+function Select-OfficeExclusions {
+    $apps = @(
+        @{ Id = 'Access';            Name = 'Access' },
+        @{ Id = 'OneNote';           Name = 'OneNote' },
+        @{ Id = 'Outlook';           Name = 'Outlook' },
+        @{ Id = 'OutlookForWindows'; Name = 'New Outlook (OutlookForWindows)' },
+        @{ Id = 'Publisher';         Name = 'Publisher' },
+        @{ Id = 'Teams';             Name = 'Teams' },
+        @{ Id = 'Groove';            Name = 'OneDrive (Groove)' },
+        @{ Id = 'Lync';              Name = 'Skype for Business (Lync)' }
+    )
+    Write-Host ""
+    Write-Host "   Applications installables :"
+    for ($i = 0; $i -lt $apps.Count; $i++) {
+        Write-Host ("    [{0}] {1}" -f ($i + 1), $apps[$i].Name)
+    }
+    Write-Host "   (Entree = aucune suppression, installation complete)"
+    $sel = Read-Host "   Quelles applications supprimer ? (numeros separes par des virgules, ex. 1,3,6)"
+    $excluded = @()
+    if (-not [string]::IsNullOrWhiteSpace($sel)) {
+        foreach ($n in ($sel -split ',')) {
+            $idx = 0
+            if ([int]::TryParse($n.Trim(), [ref]$idx) -and $idx -ge 1 -and $idx -le $apps.Count) {
+                $excluded += $apps[$idx - 1].Id
+            }
+        }
+    }
+    return $excluded
+}
+
+function Select-OfficeEdition {
+    Write-Host ""
+    Write-Host "   Edition de Microsoft Office :"
+    Write-Host "    [1] Minimal : Word, Excel, PowerPoint uniquement (defaut)"
+    Write-Host "    [2] O365ProPlusRetail : Microsoft 365 Apps (complet)"
+    Write-Host "    [3] O365BusinessRetail"
+    Write-Host "    [4] O365HomePremRetail"
+    Write-Host "    [5] Personnalise : saisir un Product ID"
+    $e = Read-Host "   Votre choix (Entree = Minimal)"
+    if ([string]::IsNullOrWhiteSpace($e)) { $e = '1' }
+    $excluded = @()
+    switch ($e) {
+        '1' { $edition = 'O365ProPlusRetail'; $excluded = $OfficeExcludedApps }
+        '2' { $edition = 'O365ProPlusRetail'; $excluded = Select-OfficeExclusions }
+        '3' { $edition = 'O365BusinessRetail'; $excluded = Select-OfficeExclusions }
+        '4' { $edition = 'O365HomePremRetail'; $excluded = Select-OfficeExclusions }
+        '5' {
+            $edition = (Read-Host "   Product ID (ex: O365ProPlusRetail)").Trim()
+            if ([string]::IsNullOrWhiteSpace($edition)) { $edition = 'O365ProPlusRetail' }
+            $excluded = Select-OfficeExclusions
+        }
+        default {
+            Write-Host "   Choix invalide, edition Minimal utilisee." -ForegroundColor Yellow
+            $edition = 'O365ProPlusRetail'; $excluded = $OfficeExcludedApps
+        }
+    }
+    return @{ Edition = $edition; Excluded = @($excluded) }
+}
+
 function Install-OfficeOnline {
+    param([switch]$AskEdition)
     Write-Host ""
     Write-Host "   Installation de Microsoft Office via l'Office Deployment Tool (CDN Microsoft)..." -ForegroundColor Cyan
     try {
+        if ($AskEdition) {
+            $choice = Select-OfficeEdition
+            $edition = $choice.Edition
+            $excluded = @($choice.Excluded)
+        }
+        else {
+            $edition = $OfficeEdition
+            $excluded = @($OfficeExcludedApps)
+        }
         $temp = "$env:TEMP\OfficeODT"
         New-Item -ItemType Directory -Force -Path $temp | Out-Null
         $odt = "$env:TEMP\officedeploymenttool.exe"
+        if (Test-Path $odt) { Remove-Item $odt -Force }
+        Write-Host "   Recherche de la derniere version de l'ODT..."
+        $url = Get-OdtDownloadUrl
         Write-Host "   Telechargement de l'ODT..."
-        Invoke-WebRequest "https://go.microsoft.com/fwlink/p/?LinkID=626890" -OutFile $odt -UseBasicParsing
+        & curl.exe -s -L -A "Mozilla/5.0 (Windows NT 10.0; Win64; x64)" -o $odt $url
+        if (-not (Test-Path $odt) -or (Get-Item $odt).Length -lt 1000000) {
+            Write-Host "   [ERREUR] Echec du telechargement de l'ODT." -ForegroundColor Red
+            return
+        }
         Write-Host "   Extraction..."
         Start-Process $odt -ArgumentList "/quiet", "/extract:`"$temp`"" -Wait
         $setup = "$temp\setup.exe"
@@ -171,19 +287,25 @@ function Install-OfficeOnline {
             Write-Host "   [ERREUR] setup.exe de l'ODT introuvable dans $temp" -ForegroundColor Red
             return
         }
-        $config = @"
-<Configuration>
-  <Add OfficeClientEdition="$OfficeArch" Channel="$OfficeChannel" ForceUpgrade="TRUE">
-    <Product ID="$OfficeEdition">
-      <Language ID="$OfficeLanguage" />
-    </Product>
-  </Add>
-  <Display Level="None" AcceptEULA="TRUE" />
-  <Property Name="AUTOACTIVATE" Value="0" />
-  <Property Name="FORCEAPPSHUTDOWN" Value="TRUE" />
-</Configuration>
-"@
-        $config | Set-Content "$temp\config.xml" -Encoding ASCII
+        $xml = New-Object System.Text.StringBuilder
+        [void]$xml.AppendLine('<Configuration>')
+        [void]$xml.AppendLine("  <Add OfficeClientEdition=`"$OfficeArch`" Channel=`"$OfficeChannel`" ForceUpgrade=`"TRUE`">")
+        [void]$xml.AppendLine("    <Product ID=`"$edition`">")
+        [void]$xml.AppendLine("      <Language ID=`"$OfficeLanguage`" />")
+        foreach ($app in $excluded) {
+            [void]$xml.AppendLine("      <ExcludeApp ID=`"$app`" />")
+        }
+        [void]$xml.AppendLine('    </Product>')
+        [void]$xml.AppendLine('  </Add>')
+        [void]$xml.AppendLine('  <Display Level="None" AcceptEULA="TRUE" />')
+        [void]$xml.AppendLine('  <Property Name="AUTOACTIVATE" Value="0" />')
+        [void]$xml.AppendLine('  <Property Name="FORCEAPPSHUTDOWN" Value="TRUE" />')
+        [void]$xml.AppendLine('</Configuration>')
+        $xml.ToString() | Set-Content "$temp\config.xml" -Encoding ASCII
+        Write-Host "   Edition : $edition"
+        if ($excluded.Count) {
+            Write-Host "   Applications exclues : $($excluded -join ', ')"
+        }
         Write-Host "   Installation silencieuse (peut prendre plusieurs minutes)..."
         Start-Process $setup -ArgumentList "/configure", "`"$temp\config.xml`"" -Wait
         Write-Host "   Microsoft Office installe." -ForegroundColor Green
@@ -248,7 +370,7 @@ function Start-Auto {
     }
 
     # --- Question 4 : Office ---
-    if (-not $NoOffice -and (Confirm-Prompt "`n   Installer Microsoft Office ?")) { Install-OfficeOnline }
+    if (-not $NoOffice -and (Confirm-Prompt "`n   Installer Microsoft Office ?")) { Install-OfficeOnline -AskEdition }
 
     # --- Question 5 : activation ---
     if (-not $NoActivation) { Invoke-MASActivation }
@@ -256,7 +378,7 @@ function Start-Auto {
     # --- Question 6 : Winhance + profil ---
     if (-not $NoWinhance -and (Confirm-Prompt "`n   Installer Winhance et recuperer le profil ?")) {
         Install-Winhance
-        Apply-WinhanceConfig
+        Apply-WinhanceConfig -AskLocation
     }
 
     Write-Host ""
@@ -277,7 +399,7 @@ function Show-MainMenu {
         Write-Host "    [1] Point de restauration systeme"
         Write-Host "    [2] WinUtil - ouverture complete (apps + tweaks, libre)"
         Write-Host "    [3] Winhance - installation + profil (import manuel final)"
-        Write-Host "    [4] Microsoft Office - installation silencieuse (ODT)"
+        Write-Host "    [4] Microsoft Office - installation (choix de l'edition et des apps)"
         Write-Host "    [5] Activation Windows / Office - MAS"
         Write-Host ""
         Write-Host "   AUTOMATIQUE" -ForegroundColor Cyan
@@ -290,7 +412,7 @@ function Show-MainMenu {
             '1' { New-RestorePointSystem }
             '2' { Invoke-WinUtilInteractive }
             '3' { Install-Winhance; Apply-WinhanceConfig }
-            '4' { Install-OfficeOnline }
+            '4' { Install-OfficeOnline -AskEdition }
             '5' { Invoke-MASActivation }
             '6' { Start-Auto }
             '0' { break }
